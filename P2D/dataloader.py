@@ -13,14 +13,14 @@ def load(spacecraft, timerange, cadence=None):
     Load spacecraft data between timerange. Tries local (secondary, primary), then GitHub.
     
     Parameters:
-        spacecraft (str)
+        spacecraft (str, number)
         timerange (str | datetime | Timestamp | tuple of str/datetime)
         cadence (str or None): e.g. '1H'
 
     Returns:
         pd.DataFrame
     """
-    spacecraft = spacecraft_ID(spacecraft, ID_number=False).lower()
+    spacecraft = normalize_spacecraft_name(spacecraft_ID(spacecraft, ID_number=False))
     start_date, end_date = normalize_timerange(timerange)
     dfs = []
     current = start_date
@@ -75,6 +75,26 @@ def normalize_timerange(timerange):
     else:
         raise TypeError("Invalid timerange format. Use str, datetime, or tuple of two dates.")
     return start, end
+
+def normalize_spacecraft_name(name):
+    """
+    Convert official spacecraft name to file system-friendly name.
+    E.g., 'STEREO-A' -> 'stereo_a'
+    """
+    mapping = {
+        'PSP': 'psp',
+        'SOLO': 'solo',
+        'BEPIC': 'bepic',
+        'STEREO-A': 'stereo_a',
+        'STEREO-B': 'stereo_b',
+        'OMNI': 'omni',
+        'MAVEN': 'maven'
+    }
+    name_upper = name.upper()
+    for official, fs_name in mapping.items():
+        if name_upper == official:
+            return fs_name
+    raise ValueError(f"Unrecognized spacecraft name: {name}")
 
 def increment_month(date):
     """
