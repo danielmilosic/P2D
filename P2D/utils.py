@@ -80,10 +80,13 @@ def spacecraft_ID(ID, ID_number=False):
             raise ValueError("DataFrame must contain a 'Spacecraft_ID' column.")
     elif isinstance(ID, (int, float)):
         number = int(ID)
-    elif isinstance(ID, (str)):
-        if df[df['ID']==ID].any:
-            number = int(df[df['ID']==ID].index.values)
-            ID_number = True
+    elif isinstance(ID, str):
+        match = df[df['ID'].str.upper() == ID.upper()]
+        if not match.empty:
+            number = match.index[0]
+        else:
+            raise ValueError(f"Spacecraft name '{ID}' not recognized.")
+
     else:
         raise TypeError("ID must be a DataFrame, int, or float.")
 
