@@ -6,7 +6,7 @@ import numpy as np
 import os
 import pandas as pd
 import subprocess
-from CIRESA.utils import suppress_output
+from P2D.utils import suppress_output
 
 
 def plot_spacecraft_carrington(spacecraft, rlim = 1.2, xlim=None, axes = None, s = 10, variable_to_plot = 'V'):

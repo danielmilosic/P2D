@@ -220,5 +220,6 @@ def pad_data_with_nans(data, before, after, cadence='H'):
         # Update the padded DataFrame
         padded_df['CARR_LON'] = pd.concat([pad_before['CARR_LON'], carr_lon, pad_after['CARR_LON']])
 
+    padded_df = padded_df.iloc[1:]
     return padded_df
     

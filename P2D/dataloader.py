@@ -46,15 +46,13 @@ def load(spacecraft, timerange, cadence=None):
         return pd.DataFrame()
 
     df_all = pd.concat(dfs)
-    #df_all['timestamp'] = pd.to_datetime(df_all['timestamp'])
-    #df_all.set_index('timestamp', inplace=True)
-    #df_all = df_all.sort_index()
+    df_all = df_all.sort_index()
     df_all = df_all[start_date:end_date]
 
     if cadence:
         df_all = df_all.resample(cadence).mean()
 
-    return df_all.reset_index()
+    return df_all
 
 def normalize_timerange(timerange):
     """
