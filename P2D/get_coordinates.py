@@ -84,6 +84,40 @@ def get_coordinates(data, spcrft):
     # Return the lists of Carrington longitudes, distances, latitudes, and longitudes.
     return carr_lons, distances, lats, lons
 
+def download_carrington_coordinates(dates, observer='OMNI'):
+
+    # Initialize lists to store Carrington longitudes, distances, latitudes, and longitudes.
+    if observer == 'OMNI': observer = '3'
+    carr_lons = []
+    distances = []
+    # Ensure `dates` is always a list of datetime values
+    if isinstance(dates, pd.Timestamp):
+        dates = [dates]
+    elif isinstance(dates, str):
+        dates = [pd.to_datetime(dates)]
+
+    # Loop over each time point in the data.
+    for date in dates:
+        # Print the progress of the loop to track which iteration is being processed.
+
+        # Get the spacecraft coordinates at the given time using the Horizons system.
+        stony_coord = get_horizons_coord(observer, date)
+        
+        # Calculate the Carrington longitude for the given time.
+        carrington_longitude = get_carrington_longitude(date)
+
+        # Calculate the spacecraft's Carrington longitude by adding the computed longitude and the spacecraft's longitude.
+        spacecraft_carrington_phi = carrington_longitude + stony_coord.lon.value
+        carr_lons.append(spacecraft_carrington_phi)
+
+        # Store the spacecraft's radial distance from the Sun.
+        distance = stony_coord.radius.value
+        distances.append(distance)
+
+
+    # Return the lists of Carrington longitudes, distances, latitudes, and longitudes.
+    return carr_lons, distances
+
 def calculate_carrington_longitude_from_lon(date, lon):
     
     # Ensure that input is a NumPy array
