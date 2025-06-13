@@ -394,13 +394,15 @@ class P2D:
                 total_distance = np.sqrt(lon_distance**2 + r_distance**2)
 
                 best_idx = total_distance.idxmin()
-                if total_distance.loc[best_idx] < 0.01:
+                if total_distance.loc[best_idx] < 0.02 * self.degree_resolution/0.5:
                     best_row = candidate_rows.loc[best_idx].copy()
                     best_row['Encounter_time'] = time
                     best_model_rows.append(best_row)
 
         time_series = pd.DataFrame(best_model_rows)
-        self.list_of_timeseries_cutouts.append(time_series.set_index('Time'))
+        time_series['Observer_SC'] = spacecraft_ID(observer, ID_number=True)
+        if len(time_series)>0:
+            self.list_of_timeseries_cutouts.append(time_series.set_index('Time'))
         return
 
 
@@ -515,7 +517,7 @@ class P2D:
                 plt.close()
 
 
-    def plot_timeseries(self, model=None, s=10, variable_to_plot='V', fighandle=np.nan, axhandle=np.nan, dark_mode=False, vline=None):
+    def plot_timeseries(self, model=None, s=10, variable_to_plot='V', fighandle=np.nan, axhandle=np.nan, dark_mode=False, vline=None, plot_against_time=False):
         
         # if no fig and axis handles are given, create a new figure
         if isinstance(fighandle, float):
@@ -552,6 +554,15 @@ class P2D:
             xmin = -180
             xmax = 180
 
+        x = 'CARR_LON'
+        if plot_against_time:
+            x = 'plot_time'
+            if 'Observer_SC' in model.columns:
+                model['plot_time'] = model['Encounter_time']
+            else:
+                model['plot_time'] = pd.to_datetime(model.index)
+
+
         custom_palette = {
                         6: 'blue',
                         7: 'darkred',
@@ -560,7 +571,7 @@ class P2D:
                         1: 'red',
                     }     
         
-        sns.scatterplot(data=model, x='CARR_LON', y = variable_to_plot, ax = axes, s=5, hue = model['Spacecraft_ID'], palette=custom_palette, linewidth=0, legend=False)
+        sns.scatterplot(data=model, x=x, y = variable_to_plot, ax = axes, s=5, hue = model['Spacecraft_ID'], palette=custom_palette, linewidth=0, legend=False)
 
         if variable_to_plot =='V':
             ymin = 300
@@ -568,19 +579,26 @@ class P2D:
         else:
             ymin=np.min(model[variable_to_plot])
             ymax=np.max(model[variable_to_plot])
-        axes.set_ylim(ymin,ymax)
-        axes.set_xlim(xmin,xmax)
+        if not plot_against_time:
+            axes.set_ylim(ymin,ymax)
+            axes.set_xlim(xmin,xmax)
 
         if vline is not None:
-            lon, rad = self.get_lon(observer=vline, time=model.index.max())
-            if self.coordinate_system == 'HEEQ':
-                axes.vlines(x = (((lon - Earth_lon)*180/np.pi + 180) % 360) - 180, ymin=ymin, ymax=ymax, color=custom_palette[spacecraft_ID(vline, ID_number=True)], label=vline)
+            if plot_against_time:
+                axes.vlines(x = model.index.max, ymin=ymin, ymax=ymax, color=custom_palette[spacecraft_ID(vline, ID_number=True)], label=vline)
+            
             else:
-                axes.vlines(x = (lon)*180/np.pi, ymin=ymin, ymax=ymax, color=custom_palette[spacecraft_ID(vline, ID_number=True)], label=vline)
-           
+                lon, rad = self.get_lon(observer=vline, time=model.index.max())
+                if self.coordinate_system == 'HEEQ':
+                    axes.vlines(x = (((lon - Earth_lon)*180/np.pi + 180) % 360) - 180, ymin=ymin, ymax=ymax, color=custom_palette[spacecraft_ID(vline, ID_number=True)], label=vline)
+                else:
+                    axes.vlines(x = (lon)*180/np.pi, ymin=ymin, ymax=ymax, color=custom_palette[spacecraft_ID(vline, ID_number=True)], label=vline)
+            
 
     def movie(self, time_window='max', cadence='6h', frametrate=30, observers=[], **kwargs):
         
+        if len(self.list_of_timeseries_cutouts) >0:
+            self.list_of_timeseries_cutouts = []
         if len(observers)>0:
             print(f'FIRST CUTTING OUT TIMESERIES FROM {observers} PERSPECTIVE')
             list_of_observer_dfs = []
