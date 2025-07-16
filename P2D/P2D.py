@@ -7,29 +7,69 @@ import seaborn as sns
 from P2D import dataloader
 from tqdm.notebook import tqdm
 from P2D import get_coordinates
+from typing import Tuple
 
 class P2D:
 
-    def __init__(self, input_data=None, model_type='inelastic', 
-                 include_back_propagation = False, 
-                 degree_resolution=0.5, COR=0,
-                 propagation_time = '7d',
-                 coordinate_system = 'HEEQ',
-                 timerange=None):
-        
-        #self.input_data = input_data
+    def __init__(self, input_data=None, model_type:str = 'inelastic', 
+                 include_back_propagation:bool = False, 
+                 degree_resolution:float = 0.5, COR:float = 0,
+                 propagation_time:str = '7d',
+                 coordinate_system:str = 'HEEQ',
+                 timerange:list[str]=None,
+                 smooth:str=None) -> None:
+        """
+        Initializes the P2D class.
+
+        Parameters:
+            input_data: pd.DataFrame, str, or list
+                - A single DataFrame of spacecraft data
+                - A spacecraft name string to auto-load data (requires timerange)
+                - A list of spacecraft names or DataFrames
+
+            model_type: str
+                - 'inelastic' or 'ballistic'. Defaults to 'inelastic'.
+                - Any other value defaults to 'ballistic'.
+
+            include_back_propagation: bool
+                - Whether to include backpropagated solar wind
+
+            degree_resolution: float
+                - Resolution in degrees for longitudinal and radial bins
+
+            COR: float
+                - Coefficient of restitution (for inelastic model only)
+
+            propagation_time: str
+                - Duration to propagate parcels, e.g., '7d'
+
+            coordinate_system: str
+                - Either 'HEEQ' or 'CARRINGTON'
+
+            timerange: list of str
+                - Required if loading spacecraft data by name
+
+            smooth: str
+                - Optional smoothing time window
+
+        Output:
+            This function doesn't return anything, but runs the model and saves the result as self.model
+        """
+
+        # save input parameters
         self.model_type=model_type
         self.degree_resolution=degree_resolution
         self.COR = COR
         self.propagation_time = propagation_time
         self.coordinate_system = coordinate_system
         self.list_of_timeseries_cutouts = []
-        
+        self.smooth = smooth
 
         if isinstance(input_data, (pd.DataFrame)):  
             self.input_data=input_data
             self.scale_to_degree_resolution()
             self.model = self.propagation()
+
         elif isinstance(input_data, (str)):
             if timerange is None:
                 raise TypeError('You need to enter a timerange if you want to load data automatically')
@@ -39,9 +79,11 @@ class P2D:
                 self.Earth_lon, self.Earth_rad = self.get_lon(self.input_data)
                 self.scale_to_degree_resolution()
                 self.model = self.propagation()
+
         elif isinstance(input_data, (list)):     
             if all(isinstance(t, str) for t in input_data):
                 frame = []
+                spacecraft = input_data
                 for i in range (len(input_data)):
                     data = dataloader.load(spacecraft=input_data[i], timerange=timerange)
                     frame.append(data)
@@ -50,22 +92,25 @@ class P2D:
                 input_data = input_data
             
             model_output_frame = []
-            for i in input_data:
+            for i in tqdm(input_data, desc=f'propagating spacecraft data'):
                 self.input_data=i
                 self.scale_to_degree_resolution()
                 if isinstance(i, (pd.DataFrame)):  
                     model = self.propagation()
                     model_output_frame.append(model)
             self.model = pd.concat(model_output_frame)
+
         else:
             raise TypeError('Cannot run model without input data')
 
         return
     
-    def propagation(self):
+    def propagation(self) -> pd.DataFrame:
 
-        #self.scale_to_degree_resolution()
-        #output = self.input_data['V'].values*2
+        """
+        Runs the propagation algorithm. Is called at the initiation of the P2D class. 
+        
+        """
 
         n = int(np.floor(pd.Timedelta(self.propagation_time) / pd.Timedelta(self.cadence)))
         self.n = n # PROPAGATION STEPS
@@ -82,8 +127,8 @@ class P2D:
 
         model_output = np.zeros((n * m, 6)) # CAREFUL, DONT GET ZERO AS A RESULT
 
-
-        for i in tqdm(range( n + m )):
+        for i in tqdm(range(max(n,m))):
+        #for i in tqdm(range( n + m )):
 
             if i == 0:
                 # Initial values for the first step
@@ -100,6 +145,7 @@ class P2D:
                 ## PHASE 1: INCREASING TRIANGLE
                 if i < min(n,m):
                     no_update=False
+
                     first = i * (i + 1) // 2
                     last = first + i
                     first_previous = i * (i - 1) // 2
@@ -143,8 +189,8 @@ class P2D:
                 
 
                 # N decreases quadratically
-                ratio = np.nan_to_num((model_output[first_previous : last_previous, 0]/model_output[first : last + 1, 0]), nan=1.0)
-                model_output[first : last + 1, 0] *= ratio**2
+                #ratio = np.nan_to_num((model_output[first_previous : last_previous, 2]/model_output[first : last + 1, 2]), nan=1.0)
+                #model_output[first : last + 1, 0] *= ratio**2
 
 
                 #V
@@ -177,20 +223,44 @@ class P2D:
 
 
                 #Sim_step
-                #model_output[first : last + 1, 5] = range(last  - first, -1, -1) #NEEDS TO BE ADAPTED FOR PHASE 2 AND 3
                 model_output[first : last + 1, 5] = model_output[first_previous : last_previous, 5] +1
 
                 if self.model_type == 'inelastic':
+                    
+
+                    # DON'T ALWAYS GO TO LOOP ? MAYBE MATRIX?
+
+                    # R_now = model_output[first: last + 1, 2]
+                    # L_now = model_output[first: last + 1, 3]
+                    # R_past = model_output[:first, 2]
+                    # L_past = model_output[:first, 3]
 
                     # Iterate over previous steps for momentum conservation
                     for j in range(first, last + 1):
+
+                        # current_mass = model_output[j, 0]
+                        # current_velocity = model_output[j, 1]
+                        # current_R = model_output[j, 2]
+                        # current_L = model_output[j, 3]
+
+                        # past_data = model_output[:j]
+                        # delta_R = np.abs(current_R - past_data[:, 2])  # IN AU
+                        # delta_L = np.abs(current_L - past_data[:, 3])  # IN RAD
+
+                        # mask = (delta_R < L) & (delta_L < self.degree_resolution / 180 * np.pi)
+                        # num_colliding = np.sum(mask)
+                        # print(num_colliding)
+
+                        # if num_colliding > 0:
+
+                        # WHICH PREVIOUS SHOULD BE  REALLY CONSIDERED? ONLY LAST MONTH WOULD BE NICE
                         delta_R = np.abs(model_output[j, 2] - model_output[:j, 2]) # IN AU
                         delta_L = np.abs(model_output[j, 3] - model_output[:j, 3]) # IN RAD
 
-                        mask = (delta_R < L) & (delta_L  < self.degree_resolution/180*np.pi/1.5 )  # Adjust the conditions as needed
-                        
+                        mask = (delta_R < L) & (delta_L  < self.degree_resolution/180*np.pi)  # Adjust the conditions as needed
                         if np.any(mask):
                             
+                            print('COLLIDING')
                             # p_b = u_b * m_b (SUM)
                             pastsum = np.sum(model_output[0 : j][mask, 1] * model_output[0 : j][mask, 0])
 
@@ -212,6 +282,7 @@ class P2D:
                                                         + model_output[j, 1] * model_output[j, 0]*(self.COR+1.)
                                                         - model_output[0 : j][mask, 1] * model_output[j, 0] * self.COR) /
                                                                     (model_output[j, 0] + model_output[0 : j][mask, 0]))
+                            
 
         model_output = model_output[~np.all(model_output == 0, axis=1)]
 
@@ -228,94 +299,38 @@ class P2D:
 
         merged_df['Start_time_of_parcel'] = merged_df['Time']
         merged_df['Time'] = merged_df['Time'] +  pd.to_timedelta(self.cadence)*merged_df['Sim_step']
-        #merged_df.set_index('Time')
 
         return merged_df.set_index('Time')
     
-    # def get_lon(self, model=None, observer='OMNI', time = None):
-        
-    #     if model is None:
-    #         model = self.model#[self.model['Sim_step']==1]
-    #     else:
-    #         if 'Sim_step' in model.columns:
-    #             model = model#[model['Sim_step']<=1]
+  
+    def get_lon(self, observer:str = 'OMNI', time:str = None) -> Tuple[float, float]:
 
-    #     #model = model[model['Spacecraft_ID'] == spacecraft_ID(observer, ID_number=True)]
-    #     model_df = model.sort_index()
-    #     model_df = model_df[~model_df.index.duplicated(keep='first')]
-    #     start_time = model_df.index[0].strftime('%Y-%m-%d-%H:%M')
-    #     end_time = model_df.index[-1].strftime('%Y-%m-%d-%H:%M')
-
-    #     spacecraft_data = dataloader.load(spacecraft=observer, timerange=[start_time,end_time])
-    #     spacecraft_data = spacecraft_data[~spacecraft_data.index.duplicated(keep='first')]
-    #     # Get unique model times sorted
-    #     unique_times = model_df.index.drop_duplicates().sort_values()
-
-    #     # # Unwrap the angle to remove discontinuities
-    #     spacecraft_data['CARR_LON_RAD_UNWRAPPED'] = np.unwrap(spacecraft_data['CARR_LON_RAD'])
-
-    #     # Interpolate omni_data['CARR_LON_RAD'] at unique_times (time-based interpolation)
-    #     spacecraft_interp = (spacecraft_data[['CARR_LON_RAD_UNWRAPPED', 'R']]
-    #                 .reindex(spacecraft_data.index.union(unique_times))
-    #                 .sort_index()
-    #                 .interpolate(method='time')
-    #                 .reindex(unique_times))
-        
-    #             # Wrap the longitude back to [0, 2π)
-    #     spacecraft_interp['CARR_LON_RAD'] = np.mod(spacecraft_interp['CARR_LON_RAD_UNWRAPPED'], 2 * np.pi)
-
-    #     # Drop the unwrapped column if no longer needed
-    #     spacecraft_interp = spacecraft_interp.drop(columns='CARR_LON_RAD_UNWRAPPED')
-
-    #     # lon = spacecraft_interp.loc[unique_times[-1]]['CARR_LON_RAD']
-    #     # rad = spacecraft_interp.loc[unique_times[-1]]['R']
-
-    #     # Find the index in spacecraft_data that is closest to the last unique_time
-
-    #     if time is None:
-    #         time = unique_times[-1]
-    #     nearest_idx = spacecraft_interp.index.get_indexer([time], method='nearest')[0]
-
-    #     print(time)
-
-    #     # Use that index to retrieve the values
-    #     lon = spacecraft_interp.iloc[nearest_idx]['CARR_LON_RAD']
-    #     rad = spacecraft_interp.iloc[nearest_idx]['R']
-
-    #     #print(observer, lon, time, nearest_idx)
-    #     return lon, rad
-
-    def get_lon(self, observer='OMNI', time = None):
-        
         if time is None:
             time = self.model.index[-1]
 
         data = dataloader.load(spacecraft=observer, timerange=time)
-
-        nearest_idx = data.index.get_indexer([time], method='nearest')[0]
+        nearest_idx = -1
+        if len(data)>0:
+            nearest_idx = data.index.get_indexer([time], method='nearest')[0]
         if (nearest_idx == -1):
             print(f'{time} NO DATA, DOWNLOADING {observer} POSITION')
             lon, rad = suppress_output(get_coordinates.download_carrington_coordinates, dates=time, observer=observer)
-            #print(lon[0][0], rad[0])
             return lon[0][0]*np.pi/180, rad[0]
         else:
             if (data.index[nearest_idx] - time) > pd.Timedelta('1h'):
                 print(f'{time} NO DATA, DOWNLOADING {observer} POSITION')
                 lon, rad = suppress_output(get_coordinates.download_carrington_coordinates, dates=time, observer=observer)
-                #print(lon[0][0], rad[0])
                 return lon[0][0]*np.pi/180, rad[0]
-            #return np.nan, np.nan
         
         # Use that index to retrieve the values
         lon = data.iloc[nearest_idx]['CARR_LON_RAD']
         rad = data.iloc[nearest_idx]['R']
 
-        #print(observer, lon)
         return lon, rad
 
 
 
-    def scale_to_degree_resolution(self):
+    def scale_to_degree_resolution(self) -> None:
 
         # Constants
         degperhour = 0.55 # Solar rotation
@@ -337,11 +352,16 @@ class P2D:
                                         ,self.input_data.index[-1], cadence=cadence)
 
         scaled_input_data = scaled_input_data[~scaled_input_data.index.duplicated(keep='first')]
+        if self.smooth is not None:
+            columns = list(scaled_input_data.columns)
+            columns.remove('CARR_LON_RAD')
+            columns.remove('CARR_LON')
+            scaled_input_data[columns] = scaled_input_data[columns].rolling(self.smooth).mean()
         self.scaled_input_data = scaled_input_data
 
         return 
 
-    def observe_from(self, observer='OMNI', time_window='max'):
+    def observe_from(self, observer:str='OMNI', time_window:str='max') -> None:
         # Filter and sort model
         model = self.model[self.model['Sim_step'] == 1].sort_index()
         model = model[~model.index.duplicated(keep='first')]
@@ -364,7 +384,7 @@ class P2D:
             .reindex(unique_times)
         )
 
-        # Identify spacecraft used in the model
+        # Identify all spacecraft used in the model
         origin_spacecraft = model['Spacecraft_ID'].unique()
 
         # Pre-filter model by spacecraft ID to avoid repeated filtering
@@ -381,9 +401,9 @@ class P2D:
             for sc, model_rows in model_by_sc.items():
                 # Subset of model_rows up to current time
                 if time_window == 'max':
-                    candidate_rows = model_rows[model_rows['Time'] <= time]
+                    candidate_rows = model_rows[model_rows['Time'] <= time].copy()
                 else:
-                    candidate_rows = model_rows[(model_rows['Time'] <= time) & (model_rows['Time'] >= time-pd.to_timedelta(time_window))]
+                    candidate_rows = model_rows[(model_rows['Time'] <= time) & (model_rows['Time'] >= time-pd.to_timedelta(time_window))].copy()
 
                 if candidate_rows.empty:
                     continue
@@ -393,20 +413,72 @@ class P2D:
                 r_distance = sc_row['R'] - candidate_rows['R']
                 total_distance = np.sqrt(lon_distance**2 + r_distance**2)
 
-                best_idx = total_distance.idxmin()
-                if total_distance.loc[best_idx] < 0.02 * self.degree_resolution/0.5:
+                candidate_rows['Total_distance'] = total_distance
+
+                best_idx = total_distance < 0.01 * self.degree_resolution/0.5
+
+                if best_idx.any():
                     best_row = candidate_rows.loc[best_idx].copy()
                     best_row['Encounter_time'] = time
+                    best_row['CARR_LON_RAD'] = sc_row['CARR_LON_RAD']
+                    best_row['CARR_LON'] = sc_row['CARR_LON']
+
                     best_model_rows.append(best_row)
 
-        time_series = pd.DataFrame(best_model_rows)
+        time_series = pd.DataFrame(pd.concat(best_model_rows))
         time_series['Observer_SC'] = spacecraft_ID(observer, ID_number=True)
-        if len(time_series)>0:
+        
+        # REMOVE DUPLICATES
+        #print('REMOVING DUPLICATES')
+        if len(time_series) > 0:
+            start = time_series['Encounter_time'].min()
+            end = time_series['Encounter_time'].max()
+
+            if end - start > pd.Timedelta('25d'):
+                rotations = ((end - start) // pd.Timedelta('25d')) + 1  # Integer Carrington segments
+                deduped_segments = []
+
+                for i in range(rotations):
+                    rotation_start = start + i * pd.Timedelta('25d')
+                    rotation_end = start + (i + 1) * pd.Timedelta('25d')
+
+                    mask = (time_series['Encounter_time'] >= rotation_start) & (time_series['Encounter_time'] < rotation_end)
+                    segment = time_series.loc[mask].copy().sort_values(by='Total_distance', ascending=True)
+
+                    deduped = segment[~segment.duplicated(
+                        subset=[
+                                'V'
+                                , 'Index'
+                                , 'Spacecraft_ID'
+                                , 'Start_time_of_parcel'
+                                ], keep='first'
+                    )].copy()
+
+
+
+                    deduped_segments.append(deduped)
+
+                # Rebuild deduplicated time_series
+                time_series = pd.concat(deduped_segments).sort_values('Encounter_time').reset_index(drop=True)
+
+            else:
+                time_series = time_series.copy().sort_values(by='Total_distance', ascending=True)
+                deduped = time_series[~time_series.duplicated(
+                        subset=[
+                                'V'
+                                , 'Index'
+                                , 'Spacecraft_ID'
+                                , 'Start_time_of_parcel'
+                                ], keep='first'
+                    )].copy()
+                time_series = deduped.sort_values('Encounter_time').reset_index(drop=True)
+
             self.list_of_timeseries_cutouts.append(time_series.set_index('Time'))
         return
 
 
-    def plot(self, model=None, rlim=1.2, s=10, variable_to_plot='V', xlim=None, fighandle=np.nan, axhandle=np.nan, dark_mode=False):
+    def plot(self, model=None, rlim=1.2, s=10, variable_to_plot='V', 
+             xlim=None, fighandle=np.nan, axhandle=np.nan, dark_mode=False) -> None:
         
         # if no fig and axis handles are given, create a new figure
         if isinstance(fighandle, float):
@@ -517,7 +589,10 @@ class P2D:
                 plt.close()
 
 
-    def plot_timeseries(self, model=None, s=10, variable_to_plot='V', fighandle=np.nan, axhandle=np.nan, dark_mode=False, vline=None, plot_against_time=False):
+    def plot_timeseries(self, model:pd.DataFrame=None, 
+                        s:int=10, variable_to_plot:str='V', 
+                        fighandle=np.nan, axhandle=np.nan, dark_mode:bool=False, 
+                        vline:str=None, plot_against_time:bool=False) -> None:
         
         # if no fig and axis handles are given, create a new figure
         if isinstance(fighandle, float):
@@ -548,11 +623,10 @@ class P2D:
         xmax = 0
         if self.coordinate_system == 'HEEQ':
             model['CARR_LON'] = model['CARR_LON'] - Earth_lon/np.pi*180
-            #(model['CARR_LON_RAD'] - Earth_lon) /np.pi*180
-            #model['CARR_LON'] = model['CARR_LON'] - 180
             model['CARR_LON'] = ((model['CARR_LON'] + 180) % 360) - 180
-            xmin = -180
-            xmax = 180
+            xmin = 180
+            xmax = -180
+            axes.set_xlabel('HEEQ_LON')
 
         x = 'CARR_LON'
         if plot_against_time:
@@ -595,7 +669,7 @@ class P2D:
                     axes.vlines(x = (lon)*180/np.pi, ymin=ymin, ymax=ymax, color=custom_palette[spacecraft_ID(vline, ID_number=True)], label=vline)
             
 
-    def movie(self, time_window='max', cadence='6h', frametrate=30, observers=[], **kwargs):
+    def movie(self, time_window:str='max', cadence:str='6h', frametrate:int=30, observers:list[str]=[], **kwargs) -> None:
         
         if len(self.list_of_timeseries_cutouts) >0:
             self.list_of_timeseries_cutouts = []
@@ -618,80 +692,6 @@ class P2D:
         cadence = pd.Timedelta(cadence)
 
         times = pd.date_range(start=start_time, end=end_time, freq=cadence)
-
-        # def update(i):
-            
-        #     plt.clf()  # Clear the previous frame
-
-        #     # === POLAR PLOT ===
-        #     polar_left_in = (fig_width - polar_size_in) / 2  # Center horizontally
-        #     polar_bottom_in = fig_height - polar_size_in - top_margin_in
-
-        #     # Convert to normalized coordinates
-        #     polar_left = polar_left_in / fig_width
-        #     polar_bottom = polar_bottom_in / fig_height
-        #     polar_width = polar_size_in / fig_width
-        #     polar_height = polar_size_in / fig_height
-
-        #     # Add polar plot
-        #     ax_polar = fig.add_axes([polar_left, polar_bottom, polar_width, polar_height], projection='polar')
-
-
-        #     current_time = times[i]
-        #     #print(current_time)
-        #     if time_window == 'max':
-        #         plotting_df = model_df[model_df['Time'] <= current_time]
-        #     else:
-        #         window = pd.Timedelta(time_window)
-        #         window_start = current_time - window
-        #         mask = (model_df['Time'] > window_start) & (model_df['Time'] <= current_time)
-        #         plotting_df = model_df[mask]
-
-        #     self.plot(model = plotting_df.set_index('Time'), axhandle=ax_polar, fighandle=fig, **kwargs)
-
-        #     # === TIME SERIES PLOTS ===
-        #     for i, observer_df in enumerate(list_of_observer_dfs):
-        #         ts_bottom_in = polar_bottom_in - (i + 1) * (timeseries_height_in + spacing_in)
-        #         ts_left_in = polar_left_in  # align with polar plot
-        #         ts_width_in = polar_size_in
-
-        #         # Convert to normalized coords
-        #         ts_bottom = ts_bottom_in / fig_height
-        #         ts_left = ts_left_in / fig_width
-        #         ts_width = ts_width_in / fig_width
-        #         ts_height = timeseries_height_in / fig_height
-
-        #         ax_ts = fig.add_axes([ts_left, ts_bottom, ts_width, ts_height])
-
-        #         # Your plotting code for this time series
-        #         observer_df = observer_df.reset_index(drop=False).copy()
-        #         timeseries_mask = (observer_df['Encounter_time'] > window_start) & (observer_df['Encounter_time'] <= current_time)
-        #         if len(observer_df[timeseries_mask]) > 0:
-        #             self.plot_timeseries(
-        #                 model=observer_df[timeseries_mask].set_index('Encounter_time'),
-        #                 axhandle=ax_ts,
-        #                 fighandle=fig
-        #             )
-
-        #             ax_ts.text(0.01, 0.95, observers[i], transform=ax_ts.transAxes,
-        #                     fontsize=12, verticalalignment='top', horizontalalignment='left')
-
-        #         fig.text(0.85, 0.95, current_time.strftime('%Y-%m-%d %H:%M:%S'), fontsize=13)
-        #         fig.text(0.05, 0.95, 'Model: ' + str(self.model_type), fontsize=15)
-        #         fig.text(0.05, 0.93, 'Propagation: ' + str(self.propagation_time), fontsize=15)
-            
-        # # === FIGURE SETUP ===
-        # fig_width = 10  # in inches
-        # n_axes = len(observers)
-        # timeseries_height_in = 2.0
-        # polar_size_in = 8.0
-        # top_margin_in = 1.0
-        # bottom_margin_in = 1.0
-        # spacing_in = 0.5  # vertical space between axes (inches)
-
-        # # Total figure height based on all elements
-        # fig_height = top_margin_in + polar_size_in + n_axes * (timeseries_height_in + spacing_in) + bottom_margin_in
-        # fig = plt.figure(figsize=(fig_width, fig_height))
 
         def update(i):
             
@@ -755,8 +755,13 @@ class P2D:
                     & (observer_df['Encounter_time'] <= current_time)
                 )
                 if len(observer_df[timeseries_mask]) > 0:
+                    
+                    plot_ts_df = observer_df[timeseries_mask].set_index('Encounter_time').copy()
+                    if current_time not in plot_ts_df.index:
+                        plot_ts_df.loc[current_time] = np.nan
+
                     self.plot_timeseries(
-                        model=observer_df[timeseries_mask].set_index('Encounter_time'),
+                        model=plot_ts_df,
                         axhandle=ax_ts,
                         fighandle=fig,
                         vline=observers[i]
