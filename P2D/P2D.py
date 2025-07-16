@@ -116,7 +116,7 @@ class P2D:
         self.n = n # PROPAGATION STEPS
 
         hours = pd.Timedelta(self.cadence).total_seconds() / 3600
-        L = pd.Timedelta(self.cadence).total_seconds() * 600 / 1.5e8 /10 # CHARACTERISTIC DISTANCE /10
+        L = pd.Timedelta(self.cadence).total_seconds() * 600 / 1.5e8 #/10 # CHARACTERISTIC DISTANCE /10
         
         self.scaled_input_data['Time'] = self.scaled_input_data.index
         self.scaled_input_data['Index'] = range(len(self.scaled_input_data))
@@ -126,8 +126,8 @@ class P2D:
         m = len(model_input) # INPUT DATA LENGTH
 
         model_output = np.zeros((n * m, 6)) # CAREFUL, DONT GET ZERO AS A RESULT
-
-        for i in tqdm(range(max(n,m))):
+        
+        for i in tqdm(range(max(n,m)), desc=spacecraft_ID(self.input_data)):
         #for i in tqdm(range( n + m )):
 
             if i == 0:
@@ -227,61 +227,44 @@ class P2D:
 
                 if self.model_type == 'inelastic':
                     
-
-                    # DON'T ALWAYS GO TO LOOP ? MAYBE MATRIX?
-
-                    # R_now = model_output[first: last + 1, 2]
-                    # L_now = model_output[first: last + 1, 3]
-                    # R_past = model_output[:first, 2]
-                    # L_past = model_output[:first, 3]
+                    current = slice(first, last + 1)
+                    past = slice(first - 2*(last-first), first)
 
                     # Iterate over previous steps for momentum conservation
                     for j in range(first, last + 1):
 
-                        # current_mass = model_output[j, 0]
-                        # current_velocity = model_output[j, 1]
-                        # current_R = model_output[j, 2]
-                        # current_L = model_output[j, 3]
-
-                        # past_data = model_output[:j]
-                        # delta_R = np.abs(current_R - past_data[:, 2])  # IN AU
-                        # delta_L = np.abs(current_L - past_data[:, 3])  # IN RAD
-
-                        # mask = (delta_R < L) & (delta_L < self.degree_resolution / 180 * np.pi)
-                        # num_colliding = np.sum(mask)
-                        # print(num_colliding)
-
-                        # if num_colliding > 0:
-
                         # WHICH PREVIOUS SHOULD BE  REALLY CONSIDERED? ONLY LAST MONTH WOULD BE NICE
-                        delta_R = np.abs(model_output[j, 2] - model_output[:j, 2]) # IN AU
-                        delta_L = np.abs(model_output[j, 3] - model_output[:j, 3]) # IN RAD
+                        delta_R = np.abs(model_output[j, 2] - model_output[past, 2]) # IN AU
+                        delta_L = np.abs(model_output[j, 3] - model_output[past, 3]) # IN RAD
 
                         mask = (delta_R < L) & (delta_L  < self.degree_resolution/180*np.pi)  # Adjust the conditions as needed
-                        if np.any(mask):
+                        num_colliding = np.sum(mask)
+
+                        if num_colliding > 0:
                             
-                            print('COLLIDING')
+                            #print('COLLIDING')
+
                             # p_b = u_b * m_b (SUM)
-                            pastsum = np.sum(model_output[0 : j][mask, 1] * model_output[0 : j][mask, 0])
+                            pastsum = np.sum(model_output[past][mask, 1] * model_output[past][mask, 0])
 
                             # v_a = p_b + p_a / m_a + m_b(SUM)
 
                             # v_a = (1+COR)p_b + p_a - u_a*m_b(SUM)*COR  / (m_a + m_b(SUM))
                             model_output[j, 1] = (((self.COR+1.)*pastsum 
                                                 + model_output[j, 1] * model_output[j, 0] 
-                                                - model_output[j, 1]*np.sum(model_output[0 : j][mask, 0])*(self.COR)) /
-                                                (model_output[j, 0] + np.sum(model_output[0 : j][mask, 0])))
+                                                - model_output[j, 1]*np.sum(model_output[past][mask, 0])*(self.COR)) /
+                                                (model_output[j, 0] + np.sum(model_output[past][mask, 0])))
 
 
                             # p_b = u_b * m_b (VECTOR)
-                            past = model_output[0 : j][mask, 1] * model_output[0 : j][mask, 0]
+                            past_momentum = model_output[past][mask, 1] * model_output[past][mask, 0]
 
 
                             # v_b = p_b + (1+COR)p_a - u_b(VECTOR)*m_a*COR / m_a + m_b(VECTOR)
-                            model_output[0 : j][mask, 1] = ((past 
+                            model_output[past][mask, 1] = ((past_momentum
                                                         + model_output[j, 1] * model_output[j, 0]*(self.COR+1.)
-                                                        - model_output[0 : j][mask, 1] * model_output[j, 0] * self.COR) /
-                                                                    (model_output[j, 0] + model_output[0 : j][mask, 0]))
+                                                        - model_output[past][mask, 1] * model_output[j, 0] * self.COR) /
+                                                                    (model_output[j, 0] + model_output[past][mask, 0]))
                             
 
         model_output = model_output[~np.all(model_output == 0, axis=1)]
