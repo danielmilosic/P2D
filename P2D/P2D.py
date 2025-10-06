@@ -214,7 +214,7 @@ class P2D:
                 if type == 'reverse':
                     model_output[first : last + 1, 3] = model_output[first_previous : last_previous, 3] + 0.0096 * hours
                 else:
-                    model_output[first : last + 1, 3] = model_output[first_previous : last_previous, 3] - 0.0096 * hours
+                    model_output[first : last + 1, 3] = model_output[first_previous : last_previous, 3] - 0.0096 * hours #0.0096
                 if not no_update: model_output[last, 3] = model_input[i, 3]
                 
                 #Index
@@ -507,13 +507,14 @@ class P2D:
         # Loop over unique index values
         for unique_value in tqdm(seperated_model.index.unique()):
             subset = seperated_model.loc[[unique_value]]   # all rows for this index value
-            subset = subset[~subset.duplicated(subset='Spacecraft_ID', keep='first')]
+            subset = subset.sort_values('Persistence_time')
+            subset = subset[~subset.duplicated(subset='Spacecraft_ID', keep='last')]
             #subset['V_ERROR'].dropna(inplace=True)
             total_error = subset['V_ERROR'].sum()
             #combined_model.loc[unique_value, 'TOTAL_ERROR'] = total_error
             for spacecraft in subset['Spacecraft_ID'].unique():
                 error = subset.loc[subset['Spacecraft_ID'] == spacecraft, 'V_ERROR'].iloc[0]
-                
+                #print(unique_value, spacecraft, error, subset.loc[subset['Spacecraft_ID'] == spacecraft, 'Persistence_time'].iloc[0])
                 # assign contribution
                 col_name = 'Contribution from ' + spacecraft_ID(spacecraft)
                 combined_model.loc[unique_value, col_name] = total_error / error
@@ -637,13 +638,16 @@ class P2D:
         if variable_to_plot == 'V':
             sm = plt.cm.ScalarMappable(cmap='flare', norm=plt.Normalize(vmin=400, vmax=600))
             sm.set_array([])
-            cbar = plt.colorbar(sm, ax=axes, orientation='horizontal', pad=0.05, shrink=0.4, aspect=15)
-            cbar.set_label('v [km/s]')
+            cbar = plt.colorbar(sm, ax=axes, orientation='horizontal', pad=0.05, shrink=0.8, aspect=15)
+
+            cbar.ax.tick_params(labelsize=20)
+            cbar.set_label(r'v [km s$^{-1}$]', fontsize=20)
         else:
             sm = plt.cm.ScalarMappable(cmap='flare', norm=plt.Normalize(vmin=vmin, vmax=vmax))
             sm.set_array([])
-            cbar = plt.colorbar(sm, ax=axes, orientation='horizontal', pad=0.05, shrink=0.4, aspect=15)
-            cbar.set_label(variable_to_plot)
+            cbar = plt.colorbar(sm, ax=axes, orientation='horizontal', pad=0.05, shrink=0.8, aspect=15)
+            cbar.ax.tick_params(labelsize=20)
+            cbar.set_label(variable_to_plot, fontsize=20)
 
         # After colorbar creation:
         cbar.ax.xaxis.label.set_color(label_color)
@@ -1109,6 +1113,7 @@ class P2D:
         }   
 
         # Take the last row as a Series and drop unwanted columns
+        model=model.dropna()
         strip_df = model.iloc[-1].drop(labels=['V_ERROR', 'V', 'Observer_SC', 'CARR_LON', 'CARR_LON_RAD'])
 
         # Build plot DataFrame
