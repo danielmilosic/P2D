@@ -13,12 +13,14 @@ class P2D:
 
     def __init__(self, input_data=None, model_type:str = 'inelastic',
                  seperate_models:bool=False, 
+                 only_lowest_MAE = False,
                  include_back_propagation:bool = False, #NOT IMPLEMENTED
                  degree_resolution:float = 0.5, COR:float = 0,
                  propagation_time:str = '7d',
                  coordinate_system:str = 'HEEQ',
                  timerange:list[str]=None,
-                 smooth:str=None) -> None:
+                 smooth:str=None,
+                 lead_time:str='') -> None:
         """
         Initializes the P2D class.
 
@@ -66,6 +68,9 @@ class P2D:
         self.list_of_timeseries_cutouts = []
         self.smooth = smooth
         self.seperate_models = seperate_models
+        self.only_lowest_MAE = only_lowest_MAE
+        self.lead_time = lead_time
+        self.now = None
 
         if isinstance(input_data, (pd.DataFrame)):  
             self.input_data=input_data
@@ -226,47 +231,139 @@ class P2D:
                 #Sim_step
                 model_output[first : last + 1, 5] = model_output[first_previous : last_previous, 5] +1
 
-                if self.model_type == 'inelastic':
+                if (self.model_type == 'inelastic'):
                     
-                    current = slice(first, last + 1)
-                    past = slice(first - 2*(last-first), first)
+                    # WHICH PREVIOUS SHOULD BE  REALLY CONSIDERED? ONLY LAST MONTH WOULD BE NICE
 
-                    # Iterate over previous steps for momentum conservation
-                    for j in range(first, last + 1):
+                    first_collider = first-5*(last-first)
+                    if first_collider<0:
+                        first_collider=0
 
-                        # WHICH PREVIOUS SHOULD BE  REALLY CONSIDERED? ONLY LAST MONTH WOULD BE NICE
-                        delta_R = np.abs(model_output[j, 2] - model_output[past, 2]) # IN AU
-                        delta_L = np.abs(model_output[j, 3] - model_output[past, 3]) # IN RAD
 
-                        mask = (delta_R < L) & (delta_L  < self.degree_resolution/180*np.pi/10)  # Adjust the conditions as needed
-                        num_colliding = np.sum(mask)
+                    delta_R = np.abs(model_output[first_collider:last,None, 2] - model_output[None, first_collider:last, 2]) # IN AU
+                    delta_L = np.abs(model_output[first_collider:last,None, 3] - model_output[None, first_collider:last, 3]) # IN RAD
+                    #delta_L/=np.abs(model_output[first_collider:last,None, 2] * model_output[None, first_collider:last, 2])**2/2
 
-                        if num_colliding > 0:
+                    mask_matrix = np.tril((delta_R < L/5) & (delta_L < (self.degree_resolution/180*np.pi/2)), -1)
+
+                    num_colliding = np.sum(mask_matrix)
+
+                    if num_colliding > 0:
+
+                        #print('COLLIDING: ', num_colliding)
+                        particles_a = np.where(mask_matrix)[0]+first_collider
+                        particles_b = np.where(mask_matrix)[1]+first_collider
+                        
+                        #print(num_colliding,particles_a, particles_b)
+                        
+                        velocity_a = model_output[particles_a, 1]
+                        velocity_b = model_output[particles_b, 1]
+
+                        mass_a = model_output[particles_a, 0]
+                        mass_b = model_output[particles_b, 0]
+
+                        momentum_a = velocity_a * mass_a
+                        momentum_b = velocity_b * mass_b
+
+                        # v_a = p_b + p_a / m_a + m_b
+                        # v_a = (1+COR)p_b + p_a - u_a*m_b*COR  / (m_a + m_b)
+                        resulting_velocity_a = (((self.COR+1) *momentum_b) + momentum_a - (velocity_a*mass_b*self.COR)) / (mass_a+mass_b)
+                        model_output[particles_a, 1] = resulting_velocity_a
+
+                        # v_b = p_b + (1+COR)p_a - u_b*m_a*COR / m_a + m_b
+                        resulting_velocity_b = (((self.COR+1) *momentum_a) + momentum_b - (velocity_b*mass_a*self.COR)) / (mass_a+mass_b)
+                        model_output[particles_b, 1] = resulting_velocity_b
+
+                        model_output[particles_b, 0] = np.nan
+                        model_output[particles_a, 0] = mass_a+mass_b
+
+                        #if model_output[particles_a, 0] > 200: model_output[particles_a, 0] = 200
+
+
+                        # # p_b = u_b * m_b (SUM)
+                        # pastsum = np.sum(model_output[past][mask, 1] * model_output[past][mask, 0])
+
+                        # # v_a = p_b + p_a / m_a + m_b(SUM)
+
+                        # # v_a = (1+COR)p_b + p_a - u_a*m_b(SUM)*COR  / (m_a + m_b(SUM))
+                        # model_output[j, 1] = (((self.COR+1.)*pastsum 
+                        #                     + model_output[j, 1] * model_output[j, 0] 
+                        #                     - model_output[j, 1]*np.sum(model_output[past][mask, 0])*(self.COR)) /
+                        #                     (model_output[j, 0] + np.sum(model_output[past][mask, 0])))
+
+
+                        # # p_b = u_b * m_b (VECTOR)
+                        # past_momentum = model_output[past][mask, 1] * model_output[past][mask, 0]
+
+
+                        # # v_b = p_b + (1+COR)p_a - u_b(VECTOR)*m_a*COR / m_a + m_b(VECTOR)
+                        # model_output[past][mask, 1] = ((past_momentum
+                        #                             + model_output[j, 1] * model_output[j, 0]*(self.COR+1.)
+                        #                             - model_output[past][mask, 1] * model_output[j, 0] * self.COR) /
+                        #                                         (model_output[j, 0] + model_output[past][mask, 0]))
+                        
+                        # # m_b = m_a + m_b
+                        # model_output[j, 0] = np.sum(model_output[past][mask, 0] + model_output[j, 0]) * 0 
+                        # # m_a = m_a + m_b
+                        # model_output[past][mask, 0] = (model_output[past][mask, 0] + model_output[j, 0])
+                        
+
+                # if (self.model_type == 'inelastic'):
+                    
+                #     current = slice(first, last + 1)
+                #     #past = slice(first - 16*(last-first), first)
+                #     beginning_of_past = first - 32*(last-first)
+                #     past = slice(beginning_of_past, first)
+                #     if beginning_of_past<0:
+                #         past = slice(0, first)
+
+
+                #     # Iterate over previous steps for momentum conservation
+                #     for j in range(first, last + 1):
+
+                #         # WHICH PREVIOUS SHOULD BE  REALLY CONSIDERED? ONLY LAST MONTH WOULD BE NICE
+                #         delta_R = np.abs(model_output[j, 2] - model_output[past, 2]) # IN AU
+                #         delta_L = np.abs(model_output[j, 3] - model_output[past, 3]) # IN RAD
+
+                #         mask = (delta_R < L*2) & (delta_L == np.nanmin(delta_L))# & (delta_L < (self.degree_resolution/180*np.pi))  # Adjust the conditions as needed
+                #         num_colliding = np.sum(mask)
+                        
+
+                #         if num_colliding > 0:
                             
-                            #print('COLLIDING')
+                #             #print('COLLIDING')
+                #             #print(past)
 
-                            # p_b = u_b * m_b (SUM)
-                            pastsum = np.sum(model_output[past][mask, 1] * model_output[past][mask, 0])
+                #             # p_b = u_b * m_b (SUM)
+                #             pastsum = np.sum(model_output[past][mask, 1] * model_output[past][mask, 0])
 
-                            # v_a = p_b + p_a / m_a + m_b(SUM)
+                #             # v_a = p_b + p_a / m_a + m_b(SUM)
 
-                            # v_a = (1+COR)p_b + p_a - u_a*m_b(SUM)*COR  / (m_a + m_b(SUM))
-                            model_output[j, 1] = (((self.COR+1.)*pastsum 
-                                                + model_output[j, 1] * model_output[j, 0] 
-                                                - model_output[j, 1]*np.sum(model_output[past][mask, 0])*(self.COR)) /
-                                                (model_output[j, 0] + np.sum(model_output[past][mask, 0])))
-
-
-                            # p_b = u_b * m_b (VECTOR)
-                            past_momentum = model_output[past][mask, 1] * model_output[past][mask, 0]
+                #             # v_a = (1+COR)p_b + p_a - u_a*m_b(SUM)*COR  / (m_a + m_b(SUM))
+                #             model_output[j, 1] = (((self.COR+1.)*pastsum 
+                #                                 + model_output[j, 1] * model_output[j, 0] 
+                #                                 - model_output[j, 1]*np.sum(model_output[past][mask, 0])*(self.COR)) /
+                #                                 (model_output[j, 0] + np.sum(model_output[past][mask, 0])))
 
 
-                            # v_b = p_b + (1+COR)p_a - u_b(VECTOR)*m_a*COR / m_a + m_b(VECTOR)
-                            model_output[past][mask, 1] = ((past_momentum
-                                                        + model_output[j, 1] * model_output[j, 0]*(self.COR+1.)
-                                                        - model_output[past][mask, 1] * model_output[j, 0] * self.COR) /
-                                                                    (model_output[j, 0] + model_output[past][mask, 0]))
+                #             # p_b = u_b * m_b (VECTOR)
+                #             past_momentum = model_output[past][mask, 1] * model_output[past][mask, 0]
+
+
+                #             # v_b = p_b + (1+COR)p_a - u_b(VECTOR)*m_a*COR / m_a + m_b(VECTOR)
+                #             model_output[past][mask, 1] = ((past_momentum
+                #                                         + model_output[j, 1] * model_output[j, 0]*(self.COR+1.)
+                #                                         - model_output[past][mask, 1] * model_output[j, 0] * self.COR) /
+                #                                                     (model_output[j, 0] + model_output[past][mask, 0]))
                             
+                #             # m_b = m_a + m_b
+                #             model_output[j, 0] = np.sum(model_output[past][mask, 0] + model_output[j, 0]) * 0 
+                #             # m_a = m_a + m_b
+                #             model_output[past][mask, 0] = (model_output[past][mask, 0] + model_output[j, 0])
+                            
+
+
+
 
         model_output = model_output[~np.all(model_output == 0, axis=1)]
 
@@ -285,7 +382,9 @@ class P2D:
         merged_df['Start_R_of_parcel'] = merged_df['R']
         merged_df.drop(columns='R', inplace=True)
         merged_df['R'] = merged_df['R_new']
+        merged_df['i'] = merged_df['Index']
         merged_df.drop(columns='R_new', inplace=True)
+        merged_df['N'] = merged_df['N'] * (merged_df['Start_R_of_parcel']/merged_df['R'])**2
         merged_df['Time'] = merged_df['Time'] +  pd.to_timedelta(self.cadence)*merged_df['Sim_step']
 
         return merged_df.set_index('Time')
@@ -338,6 +437,7 @@ class P2D:
         scaled_input_data = pad_data_with_nans(data_filtered.resample(rule=cadence).median()
                                         ,self.input_data.index[0]
                                         ,self.input_data.index[-1], cadence=cadence)
+        
 
         scaled_input_data = scaled_input_data[~scaled_input_data.index.duplicated(keep='first')]
         if self.smooth is not None:
@@ -356,11 +456,16 @@ class P2D:
         
         """
 
+        print(f'OBSERVING FROM {observer}')
         # Filter and sort model
         model = self.model[self.model['Sim_step'] == 1].sort_index()
         model = model[~model.index.duplicated(keep='first')]
         start_time = model.index[0].strftime('%Y-%m-%d-%H:%M')
         end_time = model.index[-1].strftime('%Y-%m-%d-%H:%M')
+
+        if self.lead_time != '':
+            end_time = model.index[-1] - pd.Timedelta(self.lead_time)
+            end_time =end_time.strftime('%Y-%m-%d-%H:%M')
 
         # Load spacecraft data
         spacecraft_data = dataloader.load(spacecraft=observer, timerange=[start_time, end_time])
@@ -380,6 +485,14 @@ class P2D:
 
         # Identify all spacecraft used in the model
         origin_spacecraft = model['Spacecraft_ID'].unique()
+
+        self.model.loc[self.model['Spacecraft_ID'] == 5, 'R']*=0.95 # STEREO_B IS SLIGHLTY BEHIND EARTH -> BAD
+        STEREO_B_mask = self.model['Spacecraft_ID'] == 5
+        self.model.index = self.model.index.where(
+            ~STEREO_B_mask,
+            self.model.index + pd.Timedelta('4.5h')
+        )
+
 
         # Pre-filter model by spacecraft ID to avoid repeated filtering
         model_by_sc = {
@@ -483,9 +596,19 @@ class P2D:
         mask = ((seperated_model['Persistence_time'] > 0.1))
         seperated_model = seperated_model[mask]
         
+        if self.lead_time != '':
+            lead_time_in_days = pd.Timedelta(self.lead_time).total_seconds()/3600/24
+            mask = ((seperated_model['Persistence_time'] > lead_time_in_days))
+            seperated_model = seperated_model[mask]
+        
         # MAE = a * ∆θ + b log(∆t) +  c
-        a, b, c = 2.4, 9.6, 38.6
-        seperated_model['V_ERROR'] = a * np.log(seperated_model['Persistence_time']) + b * seperated_model['LAT_difference'] + c
+        a, b, c = 2.4, 9.1, 40.9
+        seperated_model['V_ERROR'] = a *seperated_model['LAT_difference']  + b * np.log(seperated_model['Persistence_time']) + c
+        
+        # MAE = a * ∆θ + b log(∆t) +  c
+        a, b, c = 0.03, 0.23, 2
+        seperated_model['N_ERROR'] = a *  seperated_model['LAT_difference'] + b *np.log(seperated_model['Persistence_time']) + c
+        #seperated_model['N_ERROR'] = seperated_model['V_ERROR'] /3
         #print(seperated_model[['LAT_difference', 'Persistence_time', 'V_ERROR', 'Spacecraft_ID']])
         # Start with empty combined model
         zeroes = 0.0
@@ -496,11 +619,14 @@ class P2D:
                 'CARR_LON_RAD': seperated_model['CARR_LON_RAD'].drop_duplicates(keep='first'),
                 'V_ERROR': zeroes,
                 'V': zeroes,
+                'N_ERROR': zeroes,
+                'N': zeroes,
                 'Contribution from PSP': zeroes,
                 'Contribution from SolO': zeroes,
                 'Contribution from STEREO-A': zeroes,
+                'Contribution from STEREO-B': zeroes,
                 'Contribution from OMNI': zeroes,
-                'Contribution from MAVEN': zeroes,
+                #'Contribution from MAVEN': zeroes,
             }
         )
 
@@ -522,6 +648,14 @@ class P2D:
             col_names = ['Contribution from ' + spacecraft_ID(sc) for sc in subset['Spacecraft_ID'].unique()]
             combined_model.loc[unique_value, col_names] = (combined_model.loc[unique_value, col_names] 
                                                              / combined_model.loc[unique_value, col_names].sum())
+            
+            if self.only_lowest_MAE:
+                # Find the column with the maximum (lowest MAE corresponds to highest contribution after normalization)
+                max_col = combined_model.loc[unique_value, col_names].idxmax()
+                # Set all contributions to 0, then set only the max column to 1
+                combined_model.loc[unique_value, col_names] = 0
+                combined_model.loc[unique_value, max_col] = 1
+
 
             # weighted average of V
             weighted_V = sum(
@@ -539,10 +673,26 @@ class P2D:
             )
             combined_model.loc[unique_value, 'V_ERROR'] = weighted_V_ERROR
 
+            # weighted average of V
+            weighted_N = sum(
+                combined_model.loc[unique_value, 'Contribution from ' + spacecraft_ID(sc)]
+                * subset.loc[subset['Spacecraft_ID'] == sc, 'N'].iloc[0]
+                for sc in subset['Spacecraft_ID'].unique()
+            )
+            combined_model.loc[unique_value, 'N'] = weighted_N
+
+            # weighted average of V_ERROR
+            weighted_N_ERROR = sum(
+                combined_model.loc[unique_value, 'Contribution from ' + spacecraft_ID(sc)]
+                * subset.loc[subset['Spacecraft_ID'] == sc, 'N_ERROR'].iloc[0]
+                for sc in subset['Spacecraft_ID'].unique()
+            )
+            combined_model.loc[unique_value, 'N_ERROR'] = weighted_N_ERROR
+            #combined_model.loc[unique_value, 'N_ERROR'] = weighted_N/2
+
+
         combined_model['Observer_SC'] = seperated_model['Observer_SC'].iloc[0]
         self.combined_model = combined_model
-
-        
         return
 
     def plot(self, model=None, rlim=1.2, s=10, variable_to_plot='V', 
@@ -582,11 +732,16 @@ class P2D:
         model = model.dropna(subset=[variable_to_plot])
         vmin=np.min(model[variable_to_plot])
         vmax=np.max(model[variable_to_plot])
+        if variable_to_plot=='N':
+            vmax=np.percentile(model[variable_to_plot], 95)
 
         if variable_to_plot == 'V':
             sns.scatterplot(data=model, x='CARR_LON_RAD', y = 'R', ax = axes, s=3*s, hue=variable_to_plot, palette='flare', hue_norm=(400,600), linewidth=0, legend=False)
+        elif variable_to_plot == 'N':
+            sns.scatterplot(data=model, x='CARR_LON_RAD', y = 'R', ax = axes, s=3*s, hue=variable_to_plot, palette='mako'
+                            , hue_norm=(vmin, vmax), linewidth=0, legend=False)
         else: 
-            sns.scatterplot(data=model, x='CARR_LON_RAD', y = 'R', ax = axes, s=3*s, hue=variable_to_plot, palette='flare'
+            sns.scatterplot(data=model, x='CARR_LON_RAD', y = 'R', ax = axes, s=3*s, hue=variable_to_plot, palette='mako'
                             , hue_norm=(vmin, vmax), linewidth=0, legend=False)
         
         if self.coordinate_system == 'HEEQ':
@@ -601,6 +756,9 @@ class P2D:
             if (model['Spacecraft_ID']==4).any() > 0:
                 stereo_a_lon, stereo_a_rad = self.get_lon(observer='STEREO-A', time=model.index.max())
                 sns.scatterplot(x= [(stereo_a_lon - Earth_lon)], y = [stereo_a_rad], ax = axes, s=100, color='black', linewidth=0, legend=False)
+            if (model['Spacecraft_ID']==5).any() > 0:
+                stereo_b_lon, stereo_b_rad = self.get_lon(observer='STEREO-B', time=model.index.max())
+                sns.scatterplot(x= [(stereo_b_lon - Earth_lon)], y = [stereo_b_rad], ax = axes, s=100, color='magenta', linewidth=0, legend=False)
             if (model['Spacecraft_ID']==7).any() > 0:
                 maven_lon, maven_rad = self.get_lon( observer='MAVEN', time=model.index.max())
                 sns.scatterplot(x= [(maven_lon - Earth_lon)], y = [maven_rad], ax = axes, s=100, color='darkred', linewidth=0, legend=False)
@@ -617,6 +775,9 @@ class P2D:
             if (model['Spacecraft_ID']==4).any() > 0:    
                 stereo_a_lon, stereo_a_rad = self.get_lon(observer='STEREO-A', time=model.index.max())
                 sns.scatterplot(x= [stereo_a_lon], y = [stereo_a_rad], ax = axes, s=100, color='black', linewidth=0, legend=False)
+            if (model['Spacecraft_ID']==5).any() > 0:    
+                stereo_b_lon, stereo_b_rad = self.get_lon(observer='STEREO-B', time=model.index.max())
+                sns.scatterplot(x= [stereo_b_lon], y = [stereo_b_rad], ax = axes, s=100, color='magenta', linewidth=0, legend=False)
             if (model['Spacecraft_ID']==7).any() > 0:
                 maven_lon, maven_rad = self.get_lon(observer='MAVEN', time=model.index.max())
                 sns.scatterplot(x= [maven_lon], y = [maven_rad], ax = axes, s=100, color='darkred', linewidth=0, legend=False)
@@ -638,16 +799,18 @@ class P2D:
         if variable_to_plot == 'V':
             sm = plt.cm.ScalarMappable(cmap='flare', norm=plt.Normalize(vmin=400, vmax=600))
             sm.set_array([])
-            cbar = plt.colorbar(sm, ax=axes, orientation='horizontal', pad=0.05, shrink=0.8, aspect=15)
+            cbar = plt.colorbar(sm, ax=axes, orientation='horizontal', pad=0.05, shrink=0.4, aspect=15)
 
             cbar.ax.tick_params(labelsize=20)
             cbar.set_label(r'v [km s$^{-1}$]', fontsize=20)
         else:
-            sm = plt.cm.ScalarMappable(cmap='flare', norm=plt.Normalize(vmin=vmin, vmax=vmax))
+            sm = plt.cm.ScalarMappable(cmap='mako', norm=plt.Normalize(vmin=vmin, vmax=vmax))
             sm.set_array([])
-            cbar = plt.colorbar(sm, ax=axes, orientation='horizontal', pad=0.05, shrink=0.8, aspect=15)
+            cbar = plt.colorbar(sm, ax=axes, orientation='horizontal', pad=0.05, shrink=0.4, aspect=15)
             cbar.ax.tick_params(labelsize=20)
             cbar.set_label(variable_to_plot, fontsize=20)
+            if variable_to_plot=='N': cbar.set_label(r'N [cm$^{-3}$]', fontsize=20)
+
 
         # After colorbar creation:
         cbar.ax.xaxis.label.set_color(label_color)
@@ -727,8 +890,9 @@ class P2D:
                         4: 'black',
                         1: 'red',
                     }     
-        
+        #model = model[~model.index.duplicated(keep='first')]
         sns.scatterplot(data=model, x=x, y = variable_to_plot, ax = axes, s=10*self.degree_resolution, hue = model['Spacecraft_ID'], palette=custom_palette, linewidth=0, legend=False)
+        #sns.lineplot(data=model, x=x, y = variable_to_plot, ax = axes, hue = model['Spacecraft_ID'], palette=custom_palette, linewidth=2, legend=False)
 
         if 'Observer_SC' in model.columns:
             
@@ -774,7 +938,7 @@ class P2D:
         if plot_against_time:
             axes.set_xlabel('Time')
 
-    def movie(self, time_window:str='max', cadence:str='6h', frametrate:int=30, observers:list[str]=[], name='', plot_against_time=False, **kwargs) -> None:
+    def movie(self, time_window:str='max', cadence:str='6h', frametrate:int=30, observers:list[str]=['OMNI'], name='', plot_against_time=False, **kwargs) -> None:
         
         if len(self.list_of_timeseries_cutouts) >0:
             self.list_of_timeseries_cutouts = []
@@ -883,10 +1047,13 @@ class P2D:
                             verticalalignment='top',
                             horizontalalignment='left'
                         )
-
+                    
+                    if self.lead_time != '': current_time -= self.lead_time
                     fig.text(0.2, 0.05, current_time.strftime('%Y-%m-%d %H:%M:%S'), fontsize=13)
                     fig.text(0.02, 0.95, 'Model: ' + str(self.model_type), fontsize=15)
-                    fig.text(0.02, 0.93, 'Propagation: ' + str(self.propagation_time), fontsize=15)
+                    fig.text(0.02, 0.93, 'Radial Propagation Time: ' + str(self.propagation_time), fontsize=15)
+                    if self.lead_time != '':
+                        fig.text(0.02, 0.91, 'Lead Time: ' + str(self.lead_time), fontsize=15)
 
             else: 
                     # Compute bottom for each time series axes
@@ -917,7 +1084,8 @@ class P2D:
                             axhandle=ax_ts,
                             fighandle=fig,
                             plot_against_time=plot_against_time,
-                            timewindow=time_window
+                            timewindow=time_window#,
+                            #**kwargs
                         )
 
                         ax_barplot = fig.add_axes([ts_left+0.12, 0.1, ts_width/2, ts_height/2])
@@ -930,8 +1098,9 @@ class P2D:
                         ax_barplot.set_ylim(0,1)
 
                     fig.text(0.2, 0.05, current_time.strftime('%Y-%m-%d %H:%M:%S'), fontsize=13)
-                    fig.text(0.02, 0.95, 'Model: ' + str(self.model_type), fontsize=15)
-                    fig.text(0.02, 0.93, 'Propagation: ' + str(self.propagation_time), fontsize=15)
+                    fig.text(0.02, 0.93, 'Radial Propagation Time: ' + str(self.propagation_time), fontsize=15)
+                    if self.lead_time != '':
+                        fig.text(0.02, 0.91, 'Lead Time: ' + str(self.lead_time), fontsize=15)
             
         # === FIGURE SETUP ===
         fig_width = 20  # in inches
@@ -1019,6 +1188,9 @@ class P2D:
             #     model['plot_time'] = pd.to_datetime(model.index)
             xmin = model[x].min()
             xmax = model[x].max()
+            # if self.lead_time != '':
+            #     xmax = model[x].max() + pd.Timedelta(self.lead_time)
+
             window:pd.Timedelta = xmax-xmin
             if timewindow=='max':
                 timewindow='7d'
@@ -1039,36 +1211,46 @@ class P2D:
             
             start_time = model.index.min().strftime('%Y-%m-%d-%H:%M')
             end_time = model.index.max().strftime('%Y-%m-%d-%H:%M')
+            if self.lead_time != '':
+                end_time = model.index.max() -  pd.Timedelta(self.lead_time)
+                end_time = end_time.strftime('%Y-%m-%d-%H:%M')
 
             # Load spacecraft data
-            spacecraft_data = dataloader.load(spacecraft=int(model.iloc[0]['Observer_SC']), timerange=[start_time, end_time])
-            spacecraft_data = spacecraft_data[~spacecraft_data.index.duplicated(keep='first')]
-            
-            try:
-                if self.coordinate_system == 'HEEQ':
-                    spacecraft_data['CARR_LON'] = spacecraft_data['CARR_LON'] - Earth_lon/np.pi*180
-                    spacecraft_data['CARR_LON'] = ((spacecraft_data['CARR_LON'] + 180) % 360) - 180
-                if plot_against_time:
-                    x = spacecraft_data.index
 
-                custom_palette = {
-                            6: 'blue',
-                            7: 'darkred',
-                            2: 'orange',
-                            4: 'black',
-                            1: 'red',
-                        }     
-            
-                sns.lineplot(data=spacecraft_data, x=x, y = variable_to_plot, ax = axes
-                            , color = custom_palette[int(model.iloc[0]['Observer_SC'])], linewidth=0.5
-                            , label=spacecraft_ID(int(model.iloc[0]['Observer_SC'])))
-            except KeyError:
-                print('NO CARR_LON DATA FOR THIS TIMERANGE')
+            if pd.to_datetime(end_time) > pd.to_datetime(start_time):
+
+                spacecraft_data = dataloader.load(spacecraft=int(model.iloc[0]['Observer_SC']), timerange=[start_time, end_time])
+                spacecraft_data = spacecraft_data[~spacecraft_data.index.duplicated(keep='first')]
+                
+                try:
+                    if self.coordinate_system == 'HEEQ':
+                        spacecraft_data['CARR_LON'] = spacecraft_data['CARR_LON'] - Earth_lon/np.pi*180
+                        spacecraft_data['CARR_LON'] = ((spacecraft_data['CARR_LON'] + 180) % 360) - 180
+                    if plot_against_time:
+                        x = spacecraft_data.index
+
+                    custom_palette = {
+                                6: 'blue',
+                                7: 'darkred',
+                                2: 'orange',
+                                4: 'black',
+                                1: 'red',
+                            }     
+                
+                    sns.lineplot(data=spacecraft_data, x=x, y = variable_to_plot, ax = axes
+                                , color = custom_palette[int(model.iloc[0]['Observer_SC'])], linewidth=0.5
+                                , label=spacecraft_ID(int(model.iloc[0]['Observer_SC'])))
+                except KeyError:
+                    print('NO CARR_LON DATA FOR THIS TIMERANGE')
             
 
         if variable_to_plot =='V':
             ymin = 300
             ymax = 800
+        elif variable_to_plot =='N':
+            ymin = 1
+            ymax = 250
+            axes.set_yscale('log')
         else:
             ymin=np.min(model[variable_to_plot])
             ymax=np.max(model[variable_to_plot])
@@ -1086,6 +1268,8 @@ class P2D:
                 axes.vlines(x = (((lon - Earth_lon)*180/np.pi + 180) % 360) - 180, ymin=ymin, ymax=ymax, color=custom_palette[spacecraft_ID(vline, ID_number=True)], label=vline)
             else:
                 axes.vlines(x = (lon)*180/np.pi, ymin=ymin, ymax=ymax, color=custom_palette[spacecraft_ID(vline, ID_number=True)], label=vline)
+        if self.lead_time != '':
+            axes.vlines(model.index.max() -  pd.Timedelta(self.lead_time), ymin, ymax)
         if plot_against_time:
             axes.set_xlabel('Time')
 
@@ -1109,12 +1293,13 @@ class P2D:
             7: 'darkred',
             2: 'orange',
             4: 'black',
+            5: 'magenta',
             1: 'red',
         }   
 
         # Take the last row as a Series and drop unwanted columns
         model=model.dropna()
-        strip_df = model.iloc[-1].drop(labels=['V_ERROR', 'V', 'Observer_SC', 'CARR_LON', 'CARR_LON_RAD'])
+        strip_df = model.iloc[-1].drop(labels=['V_ERROR', 'V', 'Observer_SC', 'CARR_LON', 'CARR_LON_RAD', 'N', 'N_ERROR'])
 
         # Build plot DataFrame
         plot_df = pd.DataFrame({
@@ -1135,5 +1320,5 @@ class P2D:
         axes.set_ylabel('')
         plt.title('Contributions per Spacecraft')
         plt.grid(axis='y', linestyle='--', alpha=0.7)
-        plt.xticks(ticks = [0,1,2,3,4], labels=['PSP', 'SolO', 'STEREO-A', 'OMNI', 'MAVEN'])
+        plt.xticks(ticks = [0,1,2,3,4], labels=['PSP', 'SolO', 'STEREO-A', 'STEREO-B', 'OMNI'])
         #plt.show()
