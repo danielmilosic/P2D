@@ -8,6 +8,7 @@ from P2D import dataloader
 from tqdm.notebook import tqdm
 from P2D import get_coordinates
 from typing import Tuple
+import matplotlib.dates as mdates
 
 class P2D:
 
@@ -486,11 +487,11 @@ class P2D:
         # Identify all spacecraft used in the model
         origin_spacecraft = model['Spacecraft_ID'].unique()
 
-        self.model.loc[self.model['Spacecraft_ID'] == 5, 'R']*=0.95 # STEREO_B IS SLIGHLTY BEHIND EARTH -> BAD
+        self.model.loc[self.model['Spacecraft_ID'] == 5, 'R']*=0.9 # STEREO_B IS SLIGHLTY BEHIND EARTH -> BAD
         STEREO_B_mask = self.model['Spacecraft_ID'] == 5
         self.model.index = self.model.index.where(
             ~STEREO_B_mask,
-            self.model.index + pd.Timedelta('4.5h')
+            self.model.index + pd.Timedelta('9h')
         )
 
 
@@ -739,7 +740,7 @@ class P2D:
             sns.scatterplot(data=model, x='CARR_LON_RAD', y = 'R', ax = axes, s=3*s, hue=variable_to_plot, palette='flare', hue_norm=(400,600), linewidth=0, legend=False)
         elif variable_to_plot == 'N':
             sns.scatterplot(data=model, x='CARR_LON_RAD', y = 'R', ax = axes, s=3*s, hue=variable_to_plot, palette='mako'
-                            , hue_norm=(vmin, vmax), linewidth=0, legend=False)
+                            , hue_norm=(0, 15), linewidth=0, legend=False)
         else: 
             sns.scatterplot(data=model, x='CARR_LON_RAD', y = 'R', ax = axes, s=3*s, hue=variable_to_plot, palette='mako'
                             , hue_norm=(vmin, vmax), linewidth=0, legend=False)
@@ -758,7 +759,7 @@ class P2D:
                 sns.scatterplot(x= [(stereo_a_lon - Earth_lon)], y = [stereo_a_rad], ax = axes, s=100, color='black', linewidth=0, legend=False)
             if (model['Spacecraft_ID']==5).any() > 0:
                 stereo_b_lon, stereo_b_rad = self.get_lon(observer='STEREO-B', time=model.index.max())
-                sns.scatterplot(x= [(stereo_b_lon - Earth_lon)], y = [stereo_b_rad], ax = axes, s=100, color='magenta', linewidth=0, legend=False)
+                sns.scatterplot(x= [(stereo_b_lon - Earth_lon+0.1)], y = [stereo_b_rad*0.9], ax = axes, s=100, color='magenta', linewidth=0, legend=False)
             if (model['Spacecraft_ID']==7).any() > 0:
                 maven_lon, maven_rad = self.get_lon( observer='MAVEN', time=model.index.max())
                 sns.scatterplot(x= [(maven_lon - Earth_lon)], y = [maven_rad], ax = axes, s=100, color='darkred', linewidth=0, legend=False)
@@ -802,14 +803,20 @@ class P2D:
             cbar = plt.colorbar(sm, ax=axes, orientation='horizontal', pad=0.05, shrink=0.4, aspect=15)
 
             cbar.ax.tick_params(labelsize=20)
-            cbar.set_label(r'v [km s$^{-1}$]', fontsize=20)
+            cbar.set_label(r'V [km s$^{-1}$]', fontsize=20)
+        elif variable_to_plot == 'N':
+            sm = plt.cm.ScalarMappable(cmap='mako', norm=plt.Normalize(vmin=0, vmax=15))
+            sm.set_array([])
+            cbar = plt.colorbar(sm, ax=axes, orientation='horizontal', pad=0.05, shrink=0.4, aspect=15)
+            cbar.ax.tick_params(labelsize=20)
+            cbar.ax.set_xticks([0, 15])
+            cbar.set_label(r'N [cm$^{-3}$]', fontsize=20)
         else:
             sm = plt.cm.ScalarMappable(cmap='mako', norm=plt.Normalize(vmin=vmin, vmax=vmax))
             sm.set_array([])
             cbar = plt.colorbar(sm, ax=axes, orientation='horizontal', pad=0.05, shrink=0.4, aspect=15)
             cbar.ax.tick_params(labelsize=20)
             cbar.set_label(variable_to_plot, fontsize=20)
-            if variable_to_plot=='N': cbar.set_label(r'N [cm$^{-3}$]', fontsize=20)
 
 
         # After colorbar creation:
@@ -828,8 +835,10 @@ class P2D:
                         fighandle=np.nan, axhandle=np.nan, dark_mode:bool=False, 
                         vline:str=None, plot_against_time:bool=False,
                         timewindow:str='7d') -> None:
-        
         # if no fig and axis handles are given, create a new figure
+
+
+
         if isinstance(fighandle, float):
             fig, axes = plt.subplots(figsize=(10, 5))
         else:
@@ -873,6 +882,7 @@ class P2D:
             xmin = model[x].min()
             xmax = model[x].max()
             window:pd.Timedelta = xmax-xmin
+            
             #window.round('1d')
             #window.days
             if timewindow=='max':
@@ -890,6 +900,13 @@ class P2D:
                         4: 'black',
                         1: 'red',
                     }     
+        
+        ##EXPLAIN MOVIE###
+
+        # model.loc[model['Spacecraft_ID']==6, 'V']=np.nan
+
+        ###
+
         #model = model[~model.index.duplicated(keep='first')]
         sns.scatterplot(data=model, x=x, y = variable_to_plot, ax = axes, s=10*self.degree_resolution, hue = model['Spacecraft_ID'], palette=custom_palette, linewidth=0, legend=False)
         #sns.lineplot(data=model, x=x, y = variable_to_plot, ax = axes, hue = model['Spacecraft_ID'], palette=custom_palette, linewidth=2, legend=False)
@@ -918,6 +935,11 @@ class P2D:
         if variable_to_plot =='V':
             ymin = 300
             ymax = 800
+            axes.set_ylabel(r'V [km s$^{-1}$]', fontsize=15)
+        elif variable_to_plot =='N':
+            ymin = 0
+            ymax = 200
+            axes.set_ylabel(r'N [cm$^{-3}$]', fontsize=15)
         else:
             ymin=np.min(model[variable_to_plot])
             ymax=np.max(model[variable_to_plot])
@@ -936,9 +958,23 @@ class P2D:
             else:
                 axes.vlines(x = (lon)*180/np.pi, ymin=ymin, ymax=ymax, color=custom_palette[spacecraft_ID(vline, ID_number=True)], label=vline)
         if plot_against_time:
-            axes.set_xlabel('Time')
+            axes.set_xlabel('Time', fontsize=15)
+            axes.tick_params(axis='both', which='major', labelsize=15)
+            axes.xaxis.set_major_locator(mdates.DayLocator(bymonthday=(1, 8, 15, 22)))
+        axes.legend(fontsize=20, loc='upper left')
 
-    def movie(self, time_window:str='max', cadence:str='6h', frametrate:int=30, observers:list[str]=['OMNI'], name='', plot_against_time=False, **kwargs) -> None:
+            
+
+    def movie(self, 
+              time_window:str='max', 
+              cadence:str='6h', 
+              frametrate:int=30, 
+              observers:list[str]=['OMNI'], 
+              name='', 
+              plot_against_time=False, 
+              variable_to_plot:str='V',
+              rlim=1.2,
+              **kwargs) -> None:
         
         if len(self.list_of_timeseries_cutouts) >0:
             self.list_of_timeseries_cutouts = []
@@ -991,8 +1027,68 @@ class P2D:
                 mask = (model_df['Time'] > window_start) & (model_df['Time'] <= current_time)
                 plotting_df = model_df[mask]
 
-            self.plot(model = plotting_df.set_index('Time'), axhandle=ax_polar, fighandle=fig, **kwargs)
+            plotting_df.set_index('Time', inplace=True)
 
+
+            ###EXPLAIN MOVIE
+
+            # make DatetimeIndex
+            # idx = pd.to_datetime(times)
+
+            # # define ramp interval
+            # start = pd.Timestamp('2022-04-02')
+            # end   = (start+pd.Timedelta('15d'))
+
+            # # normalized time in [0, 1]
+            # t = (idx - start) / (end - start)
+
+            # # clip to enforce:
+            # # before Feb -> 0
+            # # after Mar  -> 1
+            # t = np.clip(t, 0, 1)*5+0.1
+
+            # # build DataFrame
+            # r = pd.DataFrame({'R': t}, index=idx)
+
+            # plotting_df['R_difference'] = (plotting_df['R'] - plotting_df['Start_R_of_parcel'])
+            # plotting_df['Radial_travel_time'] = (plotting_df.index - plotting_df['Start_time_of_parcel']).dt.total_seconds()/3600/24
+            # #plotting_df.loc[plotting_df['R_difference']>r.loc[pd.to_datetime(current_time), 'R'], 'V']=np.nan
+            # plotting_df.loc[plotting_df['Radial_travel_time']>r.loc[pd.to_datetime(current_time), 'R'], 'V']=np.nan
+            # #print(plotting_df)
+
+            # if current_time < start:
+            #     fig.text(0.02, 0.95, '1. Longitudinal Propagation', fontsize=25)
+
+            # if current_time < (start+pd.Timedelta('30d')):
+            #     plotting_df.loc[plotting_df['Spacecraft_ID']==4, 'V']=np.nan
+            #     if current_time > (start):
+            #         fig.text(0.02, 0.95, '2. Radial Propagation', fontsize=25)
+
+            # if current_time < (start+pd.Timedelta('40d')):
+            #     plotting_df.loc[plotting_df['Spacecraft_ID']==2, 'V']=np.nan
+
+            # if current_time < (start+pd.Timedelta('50d')):
+            #     plotting_df.loc[plotting_df['Spacecraft_ID']==1, 'V']=np.nan
+
+            # if current_time < (start+pd.Timedelta('60d')):
+            #     observers=[]
+            #     if current_time > (start+pd.Timedelta('30d')):
+            #         fig.text(0.02, 0.95, '2.5. Add all available spacecraft', fontsize=25)
+
+            # else:
+            #     observers=['OMNI']
+            #     fig.text(0.02, 0.95, '3. Extract all model results at Earth position', fontsize=25)
+            # fig.text(0.02, 0.95, '4. Combine all information into a 1D forecast', fontsize=25)
+            
+            fig.text(0.17, 0.07, current_time.strftime('%Y-%m-%d %H:%M:%S'), fontsize=18)
+            # ####
+
+
+
+
+
+            self.plot(model = plotting_df, axhandle=ax_polar, fighandle=fig, variable_to_plot=variable_to_plot, rlim=rlim, **kwargs)
+            
             # === TIME SERIES PLOTS (Right of Polar, Vertically Centered) ===
 
             # Total height in inches of the stacked time series plots
@@ -1004,103 +1100,113 @@ class P2D:
 
             # Time series axes width
             ts_width_in = 10  # you can tweak this value
-            ts_left_in = polar_left_in + polar_size_in + 0.1  # add horizontal margin
+            ts_left_in = polar_left_in + polar_size_in + 0.4  # add horizontal margin
 
-            if self.seperate_models:
-                for i, observer_df in enumerate(list_of_observer_dfs):
-                    # Compute bottom for each time series axes
-                    ts_bottom_in = ts_stack_bottom_in + i * (timeseries_height_in + spacing_in)
+            if len(observers)>0:
+                if self.seperate_models:
+                    for i, observer_df in enumerate(list_of_observer_dfs):
+                        # Compute bottom for each time series axes
+                        ts_bottom_in = ts_stack_bottom_in + i * (timeseries_height_in + spacing_in)
 
-                    # Normalize coordinates
-                    ts_left = ts_left_in / fig_width
-                    ts_bottom = ts_bottom_in / fig_height
-                    ts_width = ts_width_in / fig_width
-                    ts_height = timeseries_height_in / fig_height
+                        # Normalize coordinates
+                        ts_left = ts_left_in / fig_width
+                        ts_bottom = ts_bottom_in / fig_height
+                        ts_width = ts_width_in / fig_width
+                        ts_height = timeseries_height_in / fig_height
 
-                    ax_ts = fig.add_axes([ts_left, ts_bottom, ts_width, ts_height])
+                        ax_ts = fig.add_axes([ts_left, ts_bottom+0.1, ts_width, ts_height])
 
-                    # Plotting
-                    observer_df = observer_df.reset_index(drop=False).copy()
-                    timeseries_mask = (
-                        (observer_df['Encounter_time'] > window_start)
-                        & (observer_df['Encounter_time'] <= current_time)
-                    )
-                    if len(observer_df[timeseries_mask]) > 0:
+                        # Plotting
+                        observer_df = observer_df.reset_index(drop=False).copy()
+                        timeseries_mask = (
+                            (observer_df['Encounter_time'] > window_start)
+                            & (observer_df['Encounter_time'] <= current_time)
+                        )
+                        if len(observer_df[timeseries_mask]) > 0:
+                            
+                            plot_ts_df = observer_df[timeseries_mask].set_index('Encounter_time').copy()
+                            #print(plot_ts_df)
+                            #plot_ts_df.loc[(plot_ts_df['Spacecraft_ID']==6) & (plot_ts_df['Sim_step']<3), 'V']=np.nan
+                            plot_ts_df.loc[plot_ts_df.index==plot_ts_df['Time'], 'V']=np.nan
+                            if current_time not in plot_ts_df.index:
+                                plot_ts_df.loc[current_time] = np.nan
+
+                            self.plot_timeseries(
+                                model=plot_ts_df,
+                                axhandle=ax_ts,
+                                fighandle=fig,
+                                vline=observers[i],
+                                plot_against_time=plot_against_time,
+                                timewindow=time_window
+                            )
+
+                            # ax_ts.text(
+                            #     0.01, 0.95, observers[i],
+                            #     transform=ax_ts.transAxes,
+                            #     fontsize=12,
+                            #     verticalalignment='top',
+                            #     horizontalalignment='left'
+                            # )
                         
-                        plot_ts_df = observer_df[timeseries_mask].set_index('Encounter_time').copy()
-                        if current_time not in plot_ts_df.index:
-                            plot_ts_df.loc[current_time] = np.nan
+                        if self.lead_time != '': current_time -= self.lead_time
+                        fig.text(0.17, 0.07, current_time.strftime('%Y-%m-%d %H:%M:%S'), fontsize=18)
+                        #fig.text(0.02, 0.95, 'Model: ' + str(self.model_type), fontsize=15)
+                        #fig.text(0.02, 0.93, 'Radial Propagation Time: ' + str(self.propagation_time), fontsize=15)
+                        if self.lead_time != '':
+                            fig.text(0.02, 0.91, 'Lead Time: ' + str(self.lead_time), fontsize=15)
 
-                        self.plot_timeseries(
-                            model=plot_ts_df,
-                            axhandle=ax_ts,
-                            fighandle=fig,
-                            vline=observers[i],
-                            plot_against_time=plot_against_time,
-                            timewindow=time_window
+                else: 
+                        # Compute bottom for each time series axes
+                        ts_bottom_in = ts_stack_bottom_in + 0 * (timeseries_height_in + spacing_in)
+
+                        # Normalize coordinates
+                        ts_left = ts_left_in / fig_width
+                        ts_bottom = ts_bottom_in / fig_height
+                        ts_width = ts_width_in / fig_width
+                        ts_height = timeseries_height_in / fig_height
+
+                        ax_ts = fig.add_axes([ts_left, ts_bottom+0.1, ts_width, ts_height])
+
+                        # Plotting
+                        observer_df = self.combined_model.reset_index(drop=False).copy()
+
+                        ####
+
+                        timeseries_mask = (
+                            (observer_df['Encounter_time'] > window_start)
+                            & (observer_df['Encounter_time'] <= current_time)
                         )
 
-                        ax_ts.text(
-                            0.01, 0.95, observers[i],
-                            transform=ax_ts.transAxes,
-                            fontsize=12,
-                            verticalalignment='top',
-                            horizontalalignment='left'
-                        )
+                        if len(observer_df[timeseries_mask]) > 0:
+                            plot_ts_df = observer_df[timeseries_mask].set_index('Encounter_time').copy()
+                            if current_time not in plot_ts_df.index:
+                                plot_ts_df.loc[current_time] = np.nan
+
+                            self.plot_combined_model(
+                                model=plot_ts_df,
+                                axhandle=ax_ts,
+                                fighandle=fig,
+                                plot_against_time=plot_against_time,
+                                timewindow=time_window,
+                                variable_to_plot=variable_to_plot,
+                                **kwargs
+                            )
+
+                            ax_barplot = fig.add_axes([ts_left+0.12, 0.1, ts_width/1.7, ts_height/2])
+
+                            self.plot_contributions(
+                                model=plot_ts_df,
+                                axhandle=ax_barplot,
+                                fighandle=fig)
+                            
+                            ax_barplot.set_ylim(0,1)
+                            
+
+                        fig.text(0.17, 0.07, current_time.strftime('%Y-%m-%d %H:%M:%S'), fontsize=18)
+                        #fig.text(0.02, 0.93, 'Radial Propagation Time: ' + str(self.propagation_time), fontsize=15)
+                        if self.lead_time != '':
+                            fig.text(0.02, 0.91, 'Lead Time: ' + str(self.lead_time), fontsize=15)
                     
-                    if self.lead_time != '': current_time -= self.lead_time
-                    fig.text(0.2, 0.05, current_time.strftime('%Y-%m-%d %H:%M:%S'), fontsize=13)
-                    fig.text(0.02, 0.95, 'Model: ' + str(self.model_type), fontsize=15)
-                    fig.text(0.02, 0.93, 'Radial Propagation Time: ' + str(self.propagation_time), fontsize=15)
-                    if self.lead_time != '':
-                        fig.text(0.02, 0.91, 'Lead Time: ' + str(self.lead_time), fontsize=15)
-
-            else: 
-                    # Compute bottom for each time series axes
-                    ts_bottom_in = ts_stack_bottom_in + 0 * (timeseries_height_in + spacing_in)
-
-                    # Normalize coordinates
-                    ts_left = ts_left_in / fig_width
-                    ts_bottom = ts_bottom_in / fig_height
-                    ts_width = ts_width_in / fig_width
-                    ts_height = timeseries_height_in / fig_height
-
-                    ax_ts = fig.add_axes([ts_left, ts_bottom+0.1, ts_width, ts_height])
-
-                    # Plotting
-                    observer_df = self.combined_model.reset_index(drop=False).copy()
-                    timeseries_mask = (
-                        (observer_df['Encounter_time'] > window_start)
-                        & (observer_df['Encounter_time'] <= current_time)
-                    )
-
-                    if len(observer_df[timeseries_mask]) > 0:
-                        plot_ts_df = observer_df[timeseries_mask].set_index('Encounter_time').copy()
-                        if current_time not in plot_ts_df.index:
-                            plot_ts_df.loc[current_time] = np.nan
-
-                        self.plot_combined_model(
-                            model=plot_ts_df,
-                            axhandle=ax_ts,
-                            fighandle=fig,
-                            plot_against_time=plot_against_time,
-                            timewindow=time_window#,
-                            #**kwargs
-                        )
-
-                        ax_barplot = fig.add_axes([ts_left+0.12, 0.1, ts_width/2, ts_height/2])
-
-                        self.plot_contributions(
-                            model=plot_ts_df,
-                            axhandle=ax_barplot,
-                            fighandle=fig)
-                        
-                        ax_barplot.set_ylim(0,1)
-
-                    fig.text(0.2, 0.05, current_time.strftime('%Y-%m-%d %H:%M:%S'), fontsize=13)
-                    fig.text(0.02, 0.93, 'Radial Propagation Time: ' + str(self.propagation_time), fontsize=15)
-                    if self.lead_time != '':
-                        fig.text(0.02, 0.91, 'Lead Time: ' + str(self.lead_time), fontsize=15)
             
         # === FIGURE SETUP ===
         fig_width = 20  # in inches
@@ -1111,7 +1217,7 @@ class P2D:
         if len(observers)>4:
             timeseries_height_in = 1.6
         polar_size_in = 8.0
-        lef_margin_in = 1.0
+        lef_margin_in = 0.7
         bottom_margin_in = 1.0
         spacing_in = 0.5  # vertical space between axes (inches)
 
@@ -1142,7 +1248,6 @@ class P2D:
                         fighandle=np.nan, axhandle=np.nan, dark_mode:bool=False, 
                         vline:str=None, plot_against_time:bool=False,
                         timewindow:str='7d') -> None:
-        
         # if no fig and axis handles are given, create a new figure
         if isinstance(fighandle, float):
             fig, axes = plt.subplots(figsize=(10, 5))
@@ -1199,7 +1304,7 @@ class P2D:
             else:
                 xmin = xmax - window.round('1d')#pd.Timedelta('5d')
         
-        sns.lineplot(data=model, x=x, y = variable_to_plot, ax = axes, color = 'magenta' ,linewidth=1, label='Model')
+        sns.lineplot(data=model, x=x, y = variable_to_plot, ax = axes, color = 'magenta' ,linewidth=1, label='P2D')
             # Error band
         y = model[variable_to_plot]
         y_err = model[variable_to_plot + '_ERROR']
@@ -1247,10 +1352,12 @@ class P2D:
         if variable_to_plot =='V':
             ymin = 300
             ymax = 800
+            axes.set_ylabel(r'V [km s$^{-1}$]', fontsize=15)
         elif variable_to_plot =='N':
             ymin = 1
             ymax = 250
             axes.set_yscale('log')
+            axes.set_ylabel(r'N [cm$^{-3}$]', fontsize=15)
         else:
             ymin=np.min(model[variable_to_plot])
             ymax=np.max(model[variable_to_plot])
@@ -1271,11 +1378,16 @@ class P2D:
         if self.lead_time != '':
             axes.vlines(model.index.max() -  pd.Timedelta(self.lead_time), ymin, ymax)
         if plot_against_time:
-            axes.set_xlabel('Time')
+            axes.set_xlabel('Time', fontsize=15)
+            axes.tick_params(axis='both', which='major', labelsize=15)
+            axes.xaxis.set_major_locator(mdates.DayLocator(bymonthday=(1, 8, 15, 22)))
+        axes.legend(fontsize=20, loc='upper left')
+
 
 
     def plot_contributions(self, model, fighandle=np.nan, axhandle=np.nan):
         
+    
         if model is None:
             model = self.combined_model.copy().sort_values('Encounter_time')
         else:
@@ -1318,7 +1430,8 @@ class P2D:
         )
         axes.set_xlabel('')
         axes.set_ylabel('')
-        plt.title('Contributions per Spacecraft')
+        plt.title('Contributions per Spacecraft', fontsize=15)
         plt.grid(axis='y', linestyle='--', alpha=0.7)
         plt.xticks(ticks = [0,1,2,3,4], labels=['PSP', 'SolO', 'STEREO-A', 'STEREO-B', 'OMNI'])
+        axes.tick_params(axis='both', which='major', labelsize=15)
         #plt.show()
